@@ -50,11 +50,53 @@ function sytra_import()
     docker rm importer > /dev/null
 }
 
+function sytra_export()
+{
+    echo "export from $3:$2/`basename $1` to $1."
+
+    docker container create \
+	--name exporter \
+	-v $3:/root/data sytra:latest \
+	> /dev/null
+    
+    docker cp exporter:$2/`basename $1` $1
+    docker rm exporter > /dev/null
+}
+
+function sytra_rootine()
+{
+    WAYPOINT="${SYTRA_WAYPOINT}"
+    if [ ! -f "${WAYPOINT}"/summary.csv ]; then
+	echo "ERROR: \$SYTRA_WAYPOINT/summary.csv is not found."
+	exit 1
+    fi
+    docker container create -i \
+	    --name rootine \
+	    -v $1:/root/data \
+	    sytra:latest sytra analyze \
+	    > /dev/null
+    
+    # import summary.csv
+    echo "sytra:import from $WAYPOINT/summary.csv to $1:/root/data/summary.csv"
+    docker cp "${WAYPOINT}"/summary.csv rootine:/root/data/summary.csv
+    # sytra analyze
+    docker start -i rootine
+    # update summarys
+    if [ $? -eq 0 ]; then
+	# rm host summary{,_base}.csv
+        rm -f "${WAYPOINT}"/summary.csv "${WAYPOINT}"/summary_base.csv
+	# export summary_base.csv
+    	echo "sytra:export from $1:/root/data/summary_base.csv $WAYPOINT/summary_base.csv" 
+        docker cp rootine:/root/data/summary_base.csv "${WAYPOINT}"/summary_base.csv
+    fi
+    docker rm rootine > /dev/null
+}
+
 VOLUMENAME="sytra-stocks"
 SUBCOM=$1
 shift
 
-if [[ $SUBCOM =~ "import"|"backup"|"extract" ]]; then
+if [[ $SUBCOM =~ "import"|"export"|"backup"|"extract"|"rootine" ]]; then
     while (( $# > 0 ))
     do
         case $1 in
@@ -103,6 +145,11 @@ if [[ $SUBCOM =~ "import"|"backup"|"extract" ]]; then
                          ${TARGETFILE:-"/root/data"}\
                          $VOLUMENAME
             ;;
+        export)
+            sytra_export ${FILENAME:-"`pwd`/summary_base.csv"}\
+                         ${TARGETFILE:-"/root/data"}\
+                         $VOLUMENAME
+            ;;
         backup)
             sytra_backup ${FILENAME:-"`pwd`/backup.tar.gz"}\
                          ${TARGETFILE:-"/root/data"}\
@@ -111,6 +158,8 @@ if [[ $SUBCOM =~ "import"|"backup"|"extract" ]]; then
         extract)
             sytra_extract ${FILENAME:-"`pwd`/backup.tar.gz"} $VOLUMENAME
             ;;
+	rootine)
+	    sytra_rootine $VOLUMENAME
     esac
 else
     docker run --rm -it -v $VOLUMENAME:/root/data sytra:latest sytra $SUBCOM "$@"
